@@ -8,11 +8,11 @@ class PipelineParallel(nn.Module):
         super().__init__()
         self.config = AutoConfig.from_pretrained(model_name)
         base_model = AutoModelForCausalLM.from_pretrained(model_name, config=self.config)
-        layer_distribution = self.distribute_layers(self.config.num_layers)
+        layer_distribution = self.distribute_layers(self.config.num_hidden_layers)
         self.embed_tokens = base_model.model.embed_tokens if pc.parallel_context.is_pipeline_first_stage else nn.Identity()
         self.decoder_layers = nn.ModuleDict({str(i): base_model.model.layers[i] for i in layer_distribution})
         self.norm = base_model.model.norm if pc.parallel_context.is_pipeline_last_stage else nn.Identity()
-        self.lm_head = base_model.model.lm_head if pc.parallel_context.is_pipeline_last_stage else nn.Identity()
+        self.lm_head = base_model.lm_head if pc.parallel_context.is_pipeline_last_stage else nn.Identity()
         del base_model
 
     def distribute_layers(self, num_layers):

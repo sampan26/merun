@@ -1,6 +1,5 @@
 import torch.distributed as dist
 
-
 class ParallelContext:
     def __init__(self, pp_rank, pp_world_size):
         self.pp_rank, self.pp_world_size = pp_rank, pp_world_size

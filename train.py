@@ -1,10 +1,12 @@
 import os
 import torch, torch.distributed as dist
 from torch.utils.data import DataLoader, DistributedSampler
+from torch.optim import AdamW
 from datasets import load_datasets
 from transformers import AutoTokenizer
+import parallel_context as pc
 from parallel_context import setup_parallel_context
-from pipeline_parallel import PipelineParallel
+from pipeline_parallel import PipelineParallel, pipeline_parallel_1f1b
 
 
 class MicroBatchDataLoader(DataLoader):
@@ -54,3 +56,16 @@ if __name__ == "__main__":
 
     
     model = PipelineParallel("HuggingFaceTB/SmolLM-360M-Instruct").to(device)
+    dataloader = MicroBatchDataLoader(GLOBAL_BATCH_SIZE, MICRO_BATCH_SIZE, SEQ_LEN, 1,  "roneneldan/TinyStories", "HuggingFaceTB/SmolLM-360M-Instruct", num_samples=NUM_SAMPLES)
+    tensor_shapes = (SEQ_LEN, MICRO_BATCH_SIZE, model.config.hidden_size)
+    optimizer = AdamW(model.parameters(), lr=LEARNING_RATE)
+    trained_tokens, step = 0, 0
+    tokens_per_step = GLOBAL_BATCH_SIZE * SEQ_LEN
+    while trained_tokens < MAX_TOKENS:
+        optimizer.zero_grad()
+        loss = pipeline_parallel_1f1b(model, dataloader, tensor_shapes, device)
+        optimizer.step()
+        trained_tokens += tokens_per_step
+        step += 1
+        if pc.parallel_context.is_pipeline_last_stage:
+            print(f"Step: {step}, Loss: {loss:.4f}, Tokens: {trained_tokens}/{MAX_TOKENS}")

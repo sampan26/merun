@@ -21,15 +21,15 @@ class MicroBatchDataLoader(DataLoader):
             self.dataset.select(range(min(num_samples, len(self.dataset))))
         dist.barrier()
         self.dataset = self.tokenize_dataset(self.dataset)
-        super().__init__(self.dataset, batch_size=micro_batch_size, pin_memory=True, num_workers=3, collate_fn=self.collate_fn, sampler=DistributedSampler(self.dataset, shuffle=False, num_replicas=data_parallel_size), shuffle=False)
+        super().__init__(self.dataset, batch_size=micro_batch_size, pin_memory=True, num_workers=3, collate_fn=self.collate_fn, sampler=DistributedSampler(self.dataset, shuffle=False, num_replicas=data_parallel_size, rank=0), shuffle=False)
 
     def collate_fn(self, batch_data):
         batch_input_ids = torch.stack([data['input_ids'] for data in batch_data])
         batch_size, seq_len = batch_input_ids.shape
         return {
-            'input_ids': batch_input_ids[: , -1].T.contiguous(),
+            'input_ids': batch_input_ids[: , :-1].T.contiguous(),
             'target_ids': batch_input_ids[: , 1:].T.contiguous(),
-            'position_idx': torch.arange(seq_len - 1, dtype=torch.long).unsqueeze(-1).expand(-1, batch_size).contiguous(),
+            'position_idx': torch.arange(seq_len - 1, dtype=torch.long).unsqueeze(1).expand(-1, batch_size).contiguous(),
             'attention_mask': torch.tril(torch.ones((seq_len - 1, seq_len - 1), dtype=torch.bool)).unsqueeze(0).expand(batch_size, -1, -1).contiguous(),
             'hidden_state': None
         }
@@ -46,6 +46,7 @@ class MicroBatchDataLoader(DataLoader):
         ).with_format("torch", columns=["input_ids"])
 
 if __name__ == "__main__":
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
     local_rank, world_size = int(os.environ['LOCAL_RANK']), int(os.environ['WORLD_SIZE'])
 
     GLOBAL_BATCH_SIZE, MICRO_BATCH_SIZE, SEQ_LEN, LEARNING_RATE, NUM_SAMPLES, MAX_TOKENS = 6, 2, 10, 1e-4, 20, 1800

@@ -1,6 +1,6 @@
 from transformers import AutoConfig, AutoModelForCausalLM
 import torch, torch.nn as nn, torch.nn.functional as F
-from distributive_primatives import communicate, bidirectional_communicate
+from distributed_primtives import communicate, bidirectional_communicate
 import parallel_context as pc
 import warnings
 

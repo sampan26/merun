@@ -6,6 +6,7 @@ from datasets import load_dataset, load_from_disk
 from transformers import AutoTokenizer
 import parallel_context as pc
 from parallel_context import setup_parallel_context
+from utils import set_all_seed
 from pipeline_parallel import PipelineParallel, pipeline_parallel_1f1b
 
 
@@ -54,7 +55,7 @@ if __name__ == "__main__":
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
     setup_parallel_context(local_rank, world_size)
-
+    set_all_seed(seed=42)
     
     model = PipelineParallel("HuggingFaceTB/SmolLM-360M-Instruct").to(device)
     data_path = "/ib-scratch/chenguang03/scratch/pan.samuel/merun/tiny_stories"

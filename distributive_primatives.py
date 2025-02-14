@@ -8,18 +8,18 @@ def communicate(operation='send_forward', tensor=None, shapes=None, dtype=None):
     src, dst = None, None
     
     if operation=="recv_forward":
-        if pc.parallel_context.is_pipeline_first_stage: return None
+        if pc.parallel_context.pp_is_first_stage: return None
         tensor = torch.empty(shapes, requires_grad=True, device="cuda", dtype=dtype)
         src = pc.parallel_context.pp_prev_rank
     elif operation=="send_forward":
-        if pc.parallel_context.is_pipeline_last_stage: return
+        if pc.parallel_context.pp_is_last_stage: return
         dst = pc.parallel_context.pp_next_rank
     elif operation=="recv_backward":
-        if pc.parallel_context.is_pipeline_last_stage: return None
+        if pc.parallel_context.pp_is_last_stage: return None
         tensor = torch.empty(shapes, requires_grad=True, device="cuda", dtype=dtype)
         src = pc.parallel_context.pp_next_rank
     elif operation=="send_backward":
-        if pc.parallel_context.is_pipeline_first_stage: return
+        if pc.parallel_context.pp_is_first_stage: return
         dst = pc.parallel_context.pp_prev_rank
     
     is_send = operation.startswith('send')
@@ -36,7 +36,7 @@ def communicate(operation='send_forward', tensor=None, shapes=None, dtype=None):
 
 def bidirectional_communicate(operation, send_tensor, recv_shape, device, dtype):
     is_fwd = (operation == "send_fwd_recv_bwd")  # Fixed typo here
-    if (is_fwd and pc.parallel_context.is_pipeline_last_stage) or (not is_fwd and pc.parallel_context.is_pipeline_first_stage): 
+    if (is_fwd and pc.parallel_context.pp_is_last_stage) or (not is_fwd and pc.parallel_context.pp_is_first_stage): 
         return None
     
     peer_rank = pc.parallel_context.pp_next_rank if is_fwd else pc.parallel_context.pp_prev_rank

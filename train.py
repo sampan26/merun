@@ -9,6 +9,8 @@ from parallel_context import setup_parallel_context
 from utils import set_all_seed
 from pipeline_parallel import PipelineParallel, pipeline_parallel_1f1b
 
+import argparse
+
 
 class MicroBatchDataLoader(DataLoader):
     def __init__(self, global_batch_size, micro_batch_size, seq_len, data_parallel_size, dataset_name, tokenizer, split="train", num_samples=None):
@@ -47,6 +49,13 @@ class MicroBatchDataLoader(DataLoader):
         ).with_format("torch", columns=["input_ids"])
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--tp_size", type=int, default=1)
+    parser.add_argument("--pp_size", type=int, default=1)
+    parser.add_argument("--dp_size", type=int, default=1)
+    
+    args = parser.parse_args()
+
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     local_rank, world_size = int(os.environ['LOCAL_RANK']), int(os.environ['WORLD_SIZE'])
 
@@ -54,7 +63,7 @@ if __name__ == "__main__":
     dist.init_process_group(backend="nccl", rank=local_rank, world_size=world_size)
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
-    setup_parallel_context(local_rank, world_size)
+    setup_parallel_context(tp_size=args.tp_size, pp_size=args.pp_size, dp_size=args.dp_size)
     set_all_seed(seed=42)
     
     model = PipelineParallel("HuggingFaceTB/SmolLM-360M-Instruct").to(device)
@@ -70,5 +79,5 @@ if __name__ == "__main__":
         optimizer.step()
         trained_tokens += tokens_per_step
         step += 1
-        if pc.parallel_context.is_pipeline_last_stage:
+        if pc.parallel_context.pp_is_last_stage:
             print(f"Step: {step}, Loss: {loss:.4f}, Tokens: {trained_tokens}/{MAX_TOKENS}")

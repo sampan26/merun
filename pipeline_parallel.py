@@ -1,6 +1,6 @@
 from transformers import AutoConfig, AutoModelForCausalLM
 import torch, torch.nn as nn, torch.nn.functional as F
-from distributed_primtives import communicate, bidirectional_communicate
+from distributive_primatives import communicate, bidirectional_communicate
 import parallel_context as pc
 import warnings
 
@@ -12,10 +12,10 @@ class PipelineParallel(nn.Module):
         self.config = AutoConfig.from_pretrained(model_name)
         base_model = AutoModelForCausalLM.from_pretrained(model_name, config=self.config)
         layer_distribution = self.distribute_layers(self.config.num_hidden_layers)
-        self.embed_tokens = base_model.model.embed_tokens if pc.parallel_context.is_pipeline_first_stage else nn.Identity()
+        self.embed_tokens = base_model.model.embed_tokens if pc.parallel_context.pp_is_first_stage else nn.Identity()
         self.decoder_layers = nn.ModuleDict({str(i): base_model.model.layers[i] for i in layer_distribution})
-        self.norm = base_model.model.norm if pc.parallel_context.is_pipeline_last_stage else nn.Identity()
-        self.lm_head = base_model.lm_head if pc.parallel_context.is_pipeline_last_stage else nn.Identity()
+        self.norm = base_model.model.norm if pc.parallel_context.pp_is_last_stage else nn.Identity()
+        self.lm_head = base_model.lm_head if pc.parallel_context.pp_is_last_stage else nn.Identity()
         del base_model
 
     def distribute_layers(self, num_layers):
@@ -47,7 +47,7 @@ def pipeline_parallel_1f1b(model, dataloader, tensor_shape, device):
         batch = next(iter(dataloader))
         batch['hidden_states'] = input_tensor
         output_tensor = model(batch, device)
-        if pc.parallel_context.is_pipeline_last_stage:
+        if pc.parallel_context.pp_is_last_stage:
             loss = F.cross_entropy(output_tensor.transpose(1, 2), batch["target_ids"].to(device), reduction='mean')
             nonlocal logging_loss
             logging_loss += loss.item()

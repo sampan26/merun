@@ -20,12 +20,12 @@ def run_one_inference_step(model, batch, device):
     logits = None
 
     recv_buffer = communicate("recv_forward", shapes=tensor_shape, dtype=torch.float32)
-    batch['hidden_states'] = None if pc.parallel_context.is_pipeline_first_stage else recv_buffer
+    batch['hidden_states'] = None if pc.parallel_context.pp_is_first_stage else recv_buffer
 
     output_tensor = model.forward(batch, device=device)
     communicate("send_forward", output_tensor)
 
-    if pc.parallel_context.is_pipeline_last_stage:
+    if pc.parallel_context.pp_is_last_stage:
         logits = output_tensor
 
     dist.barrier()
@@ -36,6 +36,7 @@ def run_one_inference_step(model, batch, device):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--max_tokens", type=int, default=32)
+    parser.add_argument("--pp_size", type=int, default=1)
     args = parser.parse_args()
 
     #TODO: support only PP
@@ -44,7 +45,7 @@ if __name__ == "__main__":
     dist.init_process_group(backend="nccl")
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
-    setup_parallel_context(local_rank, world_size)
+    setup_parallel_context(tp_size=1, pp_size=args.pp_size, dp_size=1)
 
     set_all_seed(seed=42)
     model = PipelineParallel("HuggingFaceTB/SmolLM-360M-Instruct").to(device)
@@ -76,7 +77,7 @@ if __name__ == "__main__":
 
         logits = run_one_inference_step(model, batch_prompts, device)
 
-        if pc.parallel_context.is_pipeline_last_stage:
+        if pc.parallel_context.pp_is_last_stage:
             assert logits is not None
             next_token = torch.argmax(logits[:, -1], dim=-1)
             tokenized_prompts["input_ids"] = torch.cat([tokenized_prompts["input_ids"], next_token.unsqueeze(-1)], dim=-1)

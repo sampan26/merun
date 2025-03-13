@@ -1,31 +1,32 @@
 import os
 import argparse
 import torch, torch.distributed as dist
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoConfig, AutoModelForCausalLM,AutoTokenizer
 
 from utils import set_all_seed
-import parallel_context as pc
+
+import process_group_manager as pgm
 from parallel_context import setup_parallel_context
 from pipeline_parallel import PipelineParallel
 from distributed_primtives import communicate
 
-def run_one_inference_step(model, batch, device):
-    if pc.parallel_context.pp_world_size == 1:
+def run_one_inference_step(model, batch, device, config):
+    if pgm.process_group_manager.pp_world_size == 1:
         return model.forward(batch, device=device)
     
     batch_size = batch['input_ids'].shape[0]
     seq_len = batch['input_ids'].shape[1]
-    tensor_shape = (batch_size, seq_len, model.config.hidden_size)
+    tensor_shape = (batch_size, seq_len, config.hidden_size)
 
     logits = None
 
     recv_buffer = communicate("recv_forward", shapes=tensor_shape, dtype=torch.float32)
-    batch['hidden_states'] = None if pc.parallel_context.pp_is_first_stage else recv_buffer
+    batch['hidden_states'] = None if pgm.process_group_manager.pp_is_first_stage else recv_buffer
 
     output_tensor = model.forward(batch, device=device)
     communicate("send_forward", output_tensor)
 
-    if pc.parallel_context.pp_is_last_stage:
+    if pgm.process_group_manager.pp_is_last_stage:
         logits = output_tensor
 
     dist.barrier()
@@ -48,17 +49,20 @@ if __name__ == "__main__":
     setup_parallel_context(tp_size=1, pp_size=args.pp_size, dp_size=1)
 
     set_all_seed(seed=42)
-    model = PipelineParallel("HuggingFaceTB/SmolLM-360M-Instruct").to(device)
+    model_name = "HuggingFaceTB/SmolLM-360M-Instruct"
+    config = AutoConfig.from_pretrained(model_name)
+    base_model = AutoModelForCausalLM.from_pretrained(model_name, config=config)
+    model = PipelineParallel(base_model, config).to(device)
+    del base_model
 
     model.eval()
 
     prompts = [
-        "My name is",
         "How old are you ?",
         "What is your favorite color?",
     ]
 
-    tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-360M-Instruct")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.padding_side = "left"
     tokenizer.pad_token = tokenizer.eos_token
 
@@ -75,9 +79,9 @@ if __name__ == "__main__":
             'hidden_states': None
         }
 
-        logits = run_one_inference_step(model, batch_prompts, device)
+        logits = run_one_inference_step(model, batch_prompts, device, config)
 
-        if pc.parallel_context.pp_is_last_stage:
+        if pgm.process_group_manager.pp_is_last_stage:
             assert logits is not None
             next_token = torch.argmax(logits[:, -1], dim=-1)
             tokenized_prompts["input_ids"] = torch.cat([tokenized_prompts["input_ids"], next_token.unsqueeze(-1)], dim=-1)
@@ -86,10 +90,10 @@ if __name__ == "__main__":
             tokenized_prompts['input_ids'] = torch.zeros((tokenized_prompts['input_ids'].shape[0], tokenized_prompts['input_ids'].shape[1]+1), dtype=torch.int64, device=device)
             tokenized_prompts["attention_mask"] = torch.zeros((tokenized_prompts["attention_mask"].shape[0], tokenized_prompts["attention_mask"].shape[1] + 1), dtype=torch.int64, device=device)
 
-        dist.broadcast(tokenized_prompts['input_ids'], src=pc.parallel_context.pp_last_rank)
-        dist.broadcast(tokenized_prompts['attention_mask'], src=pc.parallel_context.pp_last_rank)
+        dist.broadcast(tokenized_prompts['input_ids'], src=pgm.process_group_manager.pp_last_rank)
+        dist.broadcast(tokenized_prompts['attention_mask'], src=pgm.process_group_manager.pp_last_rank)
 
-    if pc.parallel_context.pp_last_rank:
+    if pgm.process_group_manager.pp_last_rank:
         for i, prompt in enumerate(tokenized_prompts):
             tokenized_output = tokenized_prompts['input_ids'][i, tokenized_prompts['input_ids'].shape[i]-args.max_tokens:]
             outputs = tokenizer.decode(tokenized_output)

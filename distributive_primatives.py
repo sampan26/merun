@@ -4,19 +4,19 @@ import torch, torch.distributed as dist
 import process_group_manager as pgm
 
 
-def communicate(operation='send_forward', tensor=None, shapes=None, dtype=None):
+def communicate(operation, device, dtype, tensor=None, shapes=None):
     src, dst = None, None
     
     if operation=="recv_forward":
         if pgm.process_group_manager.pp_is_first_stage: return None
-        tensor = torch.empty(shapes, requires_grad=True, device="cuda", dtype=dtype)
+        tensor = torch.empty(shapes, requires_grad=True, device=device, dtype=dtype)
         src = pgm.process_group_manager.pp_prev_rank
     elif operation=="send_forward":
         if pgm.process_group_manager.pp_is_last_stage: return
         dst = pgm.process_group_manager.pp_next_rank
     elif operation=="recv_backward":
         if pgm.process_group_manager.pp_is_last_stage: return None
-        tensor = torch.empty(shapes, requires_grad=True, device="cuda", dtype=dtype)
+        tensor = torch.empty(shapes, requires_grad=True, device=device, dtype=dtype)
         src = pgm.process_group_manager.pp_next_rank
     elif operation=="send_backward":
         if pgm.process_group_manager.pp_is_first_stage: return

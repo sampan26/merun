@@ -37,22 +37,27 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--tp_size", type=int, default=1)
+    parser.add_argument("--cp_size", type=int, default=1)
     parser.add_argument("--pp_size", type=int, default=1)
     parser.add_argument("--dp_size", type=int, default=1)
     parser.add_argument("--use_wandb", action="store_true", default=False)
     
     args = parser.parse_args()
 
+    os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
-    local_rank, world_size = int(os.environ['LOCAL_RANK']), int(os.environ['WORLD_SIZE'])
-    host, port = os.environ['MASTER_ADDR'], int(os.environ['MASTER_PORT'])
+
+    local_rank = int(os.environ["LOCAL_RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+    host = os.environ["MASTER_ADDR"]
+    port = int(os.environ["MASTER_PORT"])
 
     dist.init_process_group(rank=local_rank, world_size=world_size, backend="nccl", init_method=f"tcp://{host}:{port}")
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
-    setup_parallel_context(tp_size=args.tp_size, pp_size=args.pp_size, dp_size=args.dp_size)
+    setup_parallel_context(tp_size=args.tp_size, cp_size=args.cp_size, pp_size=args.pp_size, dp_size=args.dp_size)
     
-    if pgm.process_group_manager.pp_is_first_stage and pgm.process_group_manager.global_rank == pgm.process_group_manager.dp_first_rank:
+    if pgm.process_group_manager.global_rank == 0:
         display_parallelism_grid()
 
     
@@ -69,9 +74,9 @@ if __name__ == "__main__":
              project="merun",
              name=f"test_convergence_{pgm.process_group_manager}",
              config={
-                 "data_parallel_size": pgm.process_group_manager.dp_size,
                  "tensor_parallel_size": pgm.process_group_manager.tp_size,
                  "pipeline_parallel_size": pgm.process_group_manager.pp_size,
+                 "data_parallel_size": pgm.process_group_manager.dp_size,
                  "model": model_name,
                  "dataset": dataset_name,
                  "max_tokens": MAX_TOKENS,
@@ -87,6 +92,9 @@ if __name__ == "__main__":
 
     if pgm.process_group_manager.pp_world_size > 1:
         model = PipelineParallel(model, config).to(device)
+    
+    if pgm.process_group_manager.cp_size > 1:
+        model = ContextParallel(model, config).to(device)
     
     if pgm.process_group_manager.dp_world_size > 1:
         model = DataParallel(model, config).to(device)

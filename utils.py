@@ -1,4 +1,8 @@
-import torch, random, numpy as np
+import torch
+import random
+import numpy as np
+import builtins
+import fcntl
 import process_group_manager as pgm
 
 def set_all_seed(seed):
@@ -7,51 +11,102 @@ def set_all_seed(seed):
     if torch.cuda.is_available(): torch.cuda.manual_seed_all(seed)
 
 def display_parallelism_grid():
-    def _create_box(content):
-        return f"  {content:^3}  "
+    def _create_gpu_box(gpu_num, tp, cp, pp, dp):
+        return [
+            f"      GPU {gpu_num:<2}   ",
+            f"  +----------+",
+            f"  | tp{tp} cp{cp}  |",
+            f"  | pp{pp} dp{dp}  |",
+            f"  +----------+"
+        ]
 
-    def _create_row(row):
-        return "|" + "|".join(_create_box(f"g{num:02d}") for num in row) + "|"
+    def _create_row(start_gpu, tp_size, cp, pp, dp):
+        boxes = [_create_gpu_box(start_gpu + i, i, cp, pp, dp) for i in range(tp_size)]
+        return [" ".join(row) for row in zip(*boxes)]
 
-    def _create_border(width):
-        return "+" + "-" * (width - 2) + "+"
+    def _add_pp_label(output):
+        output.append("   |  ")
+        output.append(" PP|  ")
+        output.append("   |  ")
 
-    def _create_pp_line(width, pp_size):
-        box_width = (width - pp_size + 1) // pp_size
-        return "  ".join("PP".center(box_width) for _ in range(pp_size))
+    def _add_cp_label(output):
+        output.append("   |  CP")
+
+    def _add_vertical_separator(output):
+        output.append("   |  ")
+        output.append("   |  |")
+
+    def _add_vertical_arrow(output):
+        output.append("   |  v")
+
+    def _add_horizontal_separator(output):
+        output.append("-" * 86)
+
+    def _create_tp_arrows_and_labels(tp_group_width):
+        tp_arrow = "-" * (tp_group_width - 4) + ">"
+        tp_label = f"{'TP':^{tp_group_width}}"
+        tp_arrows = f"         {tp_arrow:<{tp_group_width}}           {tp_arrow}"
+        tp_labels = f"         {tp_label:<{tp_group_width}}           {tp_label}"
+        return tp_arrows, tp_labels
+
+    def _create_dp_arrow_and_label(total_tp_width):
+        dp_arrow = "-" * (total_tp_width - 6) + ">"
+        dp_label = f"{'DP':^{total_tp_width}}"
+        return f"      {dp_arrow}", f"      {dp_label}"
 
     output = []
-    sample_row = _create_row(pgm.process_group_manager.grid[0, :, 0])
-    row_width = len(sample_row)
-    border = _create_border(row_width)
+    tp_size = pgm.process_group_manager.tp_size
+    cp_size = pgm.process_group_manager.cp_size
+    pp_size = pgm.process_group_manager.pp_size
+    dp_size = pgm.process_group_manager.dp_size
 
-    output.append(f"=== Global Parallelism Configuration ===")
-    output.append(f"DP Size: {pgm.process_group_manager.dp_size}, PP Size: {pgm.process_group_manager.pp_size}, TP Size: {pgm.process_group_manager.grid.shape[0]}")
-    output.append("")  # Top spacing
+    output.append("=== Global Parallelism Configuration ===")
+    output.append(f"TP Size: {tp_size}, CP_size: {cp_size}, PP Size: {pp_size}, DP Size: {dp_size}")
+    output.append("")
 
-    for dp in range(pgm.process_group_manager.dp_size):
-        output.append(f"DP {dp}:")
-        output.append(f"{'':>8}{border}")
-        
-        for tp in range(pgm.process_group_manager.grid.shape[0]):
-            if tp == 0:
-                output.append(f"{'TP':>7} {_create_row(pgm.process_group_manager.grid[tp, :, dp])}")
-            else:
-                output.append(f"{'':8}{border}")
-                output.append(f"{'TP':>7} {_create_row(pgm.process_group_manager.grid[tp, :, dp])}")
-        
-        output.append(f"{'':8}{border}")
-        if pgm.process_group_manager.pp_size > 1:
-            output.append(f"{'':>7}{_create_pp_line(row_width, pgm.process_group_manager.pp_size)}")
+    for dp in range(0, dp_size, 2):
+        output.append("   |  ")
 
-        output.append("")  # Spacing between DP blocks
+        for pp in range(pp_size):
+            if pp == pp_size // 2:
+                _add_pp_label(output)
+            
+            _add_vertical_separator(output)
+            
+            for cp in range(cp_size):
+                left_start_gpu = dp * (tp_size * cp_size * pp_size) + pp * (tp_size * cp_size) + cp * tp_size
+                left_row = _create_row(left_start_gpu, tp_size, cp, pp, dp)
 
-    output.append("")  # Bottom spacing
+                if dp + 1 < dp_size:
+                    right_start_gpu = (dp+1) * (tp_size * cp_size * pp_size) + pp * (tp_size * cp_size) + cp * tp_size
+                    right_row = _create_row(right_start_gpu, tp_size, cp, pp, dp+1)
+                    for l, r in zip(left_row, right_row):
+                        output.append(f"   |  | {l:<33}  {r}")
+                else:
+                    for l in left_row:
+                        output.append(f"   |  | {l}")
 
-    output.append(f"=== Local Parallelism Configuration ===")
-    output.append(pgm.process_group_manager.__str__())            
-    output.append(f"DP Group IDs: {['g{:02d}'.format(id) for id in pgm.process_group_manager.dp_group_ids]}")
-    output.append(f"PP Group IDs: {['g{:02d}'.format(id) for id in pgm.process_group_manager.pp_group_ids]}")
-    output.append(f"TP Group IDs: {['g{:02d}'.format(id) for id in pgm.process_group_manager.tp_group_ids]}")
+                if cp < cp_size - 1:
+                    _add_cp_label(output)
+                output.append("   |  |")
+
+            _add_vertical_arrow(output)
+
+            if pp < pp_size - 1:
+                output.append("   |  ")
+
+        output.append("   |  ")
+        output.append("   v  ")
+
+        if dp + 2 < dp_size:
+            _add_horizontal_separator(output)
+
+    tp_group_width = tp_size * 13 - 1
+    total_tp_width = tp_group_width * 2 + 18
+
+    tp_arrows, tp_labels = _create_tp_arrows_and_labels(tp_group_width)
+    dp_arrow, dp_label = _create_dp_arrow_and_label(total_tp_width)
+
+    output.extend(["", tp_arrows, tp_labels, "", dp_arrow, dp_label])
 
     print("\n".join(output))

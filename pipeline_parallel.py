@@ -61,7 +61,7 @@ def pipeline_parallel_1f1b(model, dataloader, tensor_shape, device):
 
     # Warmup phase
     for _ in range(num_warmup_microbatches):
-        input_tensor = communicate('recv_forward', shapes=tensor_shape, dtype=torch.float32)
+        input_tensor = communicate('recv_forward', shapes=tensor_shape, device=device, dtype=torch.float32)
         output_tensor = _forward_step(input_tensor)
         communicate("send_forward", output_tensor)
         input_tensors.append(input_tensor)
@@ -69,7 +69,7 @@ def pipeline_parallel_1f1b(model, dataloader, tensor_shape, device):
     
     # 1F1B phase
     if num_remaining_microbatches > 0:
-        input_tensor = communicate(operation='recv_forward', shapes=tensor_shape, dtype=torch.float32)
+        input_tensor = communicate(operation='recv_forward', shapes=tensor_shape, device=device, dtype=torch.float32)
 
     for i in range(num_remaining_microbatches):
         output_tensor = _forward_step(input_tensor)
@@ -89,7 +89,7 @@ def pipeline_parallel_1f1b(model, dataloader, tensor_shape, device):
         
         if i == num_remaining_microbatches - 1:
             input_tensor = None
-            communicate('send_backward', tensor=input_tensor_grad)
+            communicate('send_backward', tensor=input_tensor_grad, device=device)
         else:
             input_tensor = bidirectional_communicate(
                 operation="send_bwd_recv_fwd", 
@@ -102,9 +102,9 @@ def pipeline_parallel_1f1b(model, dataloader, tensor_shape, device):
     # Cooldown phase
     for _ in range(num_warmup_microbatches):
         input_tensor, output_tensor = input_tensors.pop(0), output_tensors.pop(0)
-        output_tensor_grad = communicate('recv_backward', shapes=tensor_shape, dtype=torch.float32)
+        output_tensor_grad = communicate('recv_backward', shapes=tensor_shape, device=device, dtype=torch.float32)
         input_tensor_grad = model.backwards(input_tensor, output_tensor, output_tensor_grad)
-        communicate("send_backward", tensor=input_tensor_grad)
+        communicate("send_backward", tensor=input_tensor_grad, device=device, dtype=torch.float32)
 
     
     logging_loss = reduce_loss_across_dp_ranks(logging_loss, device)

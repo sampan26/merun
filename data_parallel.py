@@ -20,5 +20,6 @@ class DataParallel(nn.Module):
     def all_reduce_gradients(self):
         for param in self.model.parameters():
             if param.grad is not None:
-                dist.all_reduce(param.grad, op=dist.ReduceOp.AVG, group=pgm.process_group_manager.dp_group)
+                param.grad /= self.dp_world_size
+                dist.all_reduce(param.grad, op=dist.ReduceOp.SUM, group=pgm.process_group_manager.dp_group)
                 
